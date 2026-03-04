@@ -2,6 +2,9 @@
 
 Tkinter ベースの GUI と CLI の両方で利用できる mp3 LUFS 正規化ツールです。指定ディレクトリ配下の mp3 を再帰的に探索し、ffmpeg の `loudnorm` フィルタ（1pass）で音量をそろえます。
 
+## 開発ログ
+https://mitz17.com/blog/mp3-normalizer-devlog/
+
 ## 必要環境
 - Python 3.11 以上
 - ffmpeg 6.x 以上（`ffmpeg` コマンドへ PATH でアクセスできること）
