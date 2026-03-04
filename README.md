@@ -107,7 +107,18 @@ mp3-normalizer/
 - `processed_history.json` と `mp3_normalizer.log` は実行時のカレントディレクトリに作成されます
 
 ## 変更履歴
-変更履歴は README に記載します。
+### 2026-03-04
+- 不具合修正:
+  - `ImportError: cannot import name 'AudioProcessorx'` を修正（`main.py` の誤インポートを `AudioProcessor` に訂正）
+  - `UnicodeDecodeError: 'cp932' codec can't decode byte 0x83 ...` を修正（`ffmpeg` 出力を安全デコード）
+- 機能追加:
+  - 並列処理を導入（`ThreadPoolExecutor`）
+  - GUI に「並列実行数」入力を追加
+  - CLI に `--workers` オプションを追加
+- 実測結果（145件, `.mp3`）:
+  - Before（直列）: `670秒`（11分10秒, 終了コード `0`）
+  - After（並列4）: `207.3秒`（3分27.3秒, 終了コード `0`）
+  - 短縮: `462.7秒`（`69.1%`短縮, 約`3.23倍`高速）
 
 ## ライセンス
 本リポジトリのライセンスは [LICENSE](LICENSE) を参照してください。
