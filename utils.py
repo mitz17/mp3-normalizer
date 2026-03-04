@@ -15,6 +15,7 @@ SUPPORTED_EXTENSIONS = [".mp3"]
 LOG_FILE = Path("mp3_normalizer.log")
 FFMPEG_COMMAND = "ffmpeg"
 PROCESSED_HISTORY_FILE = Path("processed_history.json")
+MAX_WORKERS = max(1, os.cpu_count() or 1)
 DEFAULT_WORKERS = max(1, min(4, os.cpu_count() or 1))
 
 

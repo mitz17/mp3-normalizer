@@ -11,7 +11,7 @@ import tkinter as tk
 from dataclasses import dataclass
 
 from processor import AudioProcessor
-from utils import DEFAULT_LUFS, DEFAULT_TRUE_PEAK, DEFAULT_WORKERS, scan_audio_files
+from utils import DEFAULT_LUFS, DEFAULT_TRUE_PEAK, DEFAULT_WORKERS, MAX_WORKERS, scan_audio_files
 
 
 @dataclass
@@ -44,6 +44,7 @@ class AdjusterApp(tk.Tk):
         self.lufs_var = tk.DoubleVar(value=DEFAULT_LUFS)
         self.true_peak_var = tk.DoubleVar(value=DEFAULT_TRUE_PEAK)
         self.workers_var = tk.IntVar(value=DEFAULT_WORKERS)
+        self.max_workers = MAX_WORKERS
         self.force_var = tk.BooleanVar(value=False)
         self.include_subdirs_var = tk.BooleanVar(value=True)
         self.preview_summary_var = tk.StringVar(value="入力フォルダを選択してください")
@@ -77,9 +78,16 @@ class AdjusterApp(tk.Tk):
         ttk.Entry(frame, textvariable=self.true_peak_var, width=10).grid(column=1, row=3, sticky="w", **padding)
 
         ttk.Label(frame, text="並列実行数").grid(column=0, row=4, sticky="w", **padding)
-        ttk.Spinbox(frame, from_=1, to=32, textvariable=self.workers_var, width=8).grid(
-            column=1, row=4, sticky="w", **padding
-        )
+        validate_workers_cmd = (self.register(self._validate_workers_value), "%P")
+        ttk.Spinbox(
+            frame,
+            from_=1,
+            to=self.max_workers,
+            textvariable=self.workers_var,
+            width=8,
+            validate="key",
+            validatecommand=validate_workers_cmd,
+        ).grid(column=1, row=4, sticky="w", **padding)
 
         self.start_button = ttk.Button(frame, text="正規化を開始", command=self._start_processing)
         self.start_button.grid(column=0, row=5, columnspan=3, sticky="ew", padx=8, pady=(8, 4))
@@ -148,6 +156,12 @@ class AdjusterApp(tk.Tk):
             return
         if workers < 1:
             messagebox.showerror("入力エラー", "並列実行数は 1 以上を指定してください")
+            return
+        if workers > self.max_workers:
+            messagebox.showerror(
+                "入力エラー",
+                f"並列実行数は CPU 論理コア数（{self.max_workers}）以下を指定してください",
+            )
             return
 
         if not input_dir.exists() or not input_dir.is_dir():
@@ -366,6 +380,15 @@ class AdjusterApp(tk.Tk):
             pass
         finally:
             self.after(200, self._drain_queue)
+
+    def _validate_workers_value(self, proposed: str) -> bool:
+        """並列実行数入力を 1..CPU論理コア数 に制限する。"""
+        if proposed == "":
+            return True
+        if not proposed.isdigit():
+            return False
+        value = int(proposed)
+        return 1 <= value <= self.max_workers
 
     def _append_log(self, message: str) -> None:
         self.log_widget.configure(state=tk.NORMAL)
