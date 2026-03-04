@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable, List, Optional
@@ -10,6 +11,7 @@ from typing import Callable, Iterable, List, Optional
 from utils import (
     DEFAULT_LUFS,
     DEFAULT_TRUE_PEAK,
+    DEFAULT_WORKERS,
     FFMPEG_COMMAND,
     SUPPORTED_EXTENSIONS,
     ProcessedHistory,
@@ -130,11 +132,12 @@ class FfmpegExecutor:
                 command,
                 check=True,
                 capture_output=True,
-                text=True,
+                text=False,
             )
         except subprocess.CalledProcessError as exc:
+            stderr_text = self._decode_process_output(exc.stderr)
             error_msg = (
-                f"処理失敗: {input_file.name} | LUFS目標 {target_lufs} | エラー: {exc.stderr.strip()}"
+                f"処理失敗: {input_file.name} | LUFS目標 {target_lufs} | エラー: {stderr_text}"
             )
             self.logger.error(error_msg)
             self._notify(error_msg)
@@ -142,13 +145,13 @@ class FfmpegExecutor:
                 input_file=input_file,
                 output_file=destination,
                 success=False,
-                message=exc.stderr.strip(),
+                message=stderr_text,
                 command=command_str,
             )
 
         success_msg = f"処理成功: {input_file.name} → {destination.name} | LUFS目標 {target_lufs}"
         if result.stderr:
-            self.logger.debug(result.stderr)
+            self.logger.debug(self._decode_process_output(result.stderr))
         self.logger.info(success_msg)
         self._notify(success_msg)
         return NormalizationResult(
@@ -162,6 +165,20 @@ class FfmpegExecutor:
     def _notify(self, message: str) -> None:
         if self.notifier:
             self.notifier(message)
+
+    @staticmethod
+    def _decode_process_output(data: bytes | str | None) -> str:
+        """ffmpeg 出力を文字化け/DecodeError を避けて文字列化する。"""
+        if data is None:
+            return ""
+        if isinstance(data, str):
+            return data.strip()
+        for encoding in ("utf-8", "cp932"):
+            try:
+                return data.decode(encoding).strip()
+            except UnicodeDecodeError:
+                continue
+        return data.decode("utf-8", errors="replace").strip()
 
 
 class ProcessingPlanner:
@@ -290,12 +307,14 @@ class AudioProcessor:
         planner: ProcessingPlanner | None = None,
         aggregator: ResultAggregator | None = None,
         force: bool = False,
+        workers: int = DEFAULT_WORKERS,
     ) -> None:
         if logger is None:
             raise ValueError("logger is required")
         self.logger = logger
         self.notifier = notifier
         self.force = force
+        self.workers = max(1, workers)
         self.history_service = history_service or HistoryService()
         self.executor = executor or FfmpegExecutor(
             ffmpeg_cmd=ffmpeg_cmd, logger=self.logger, notifier=notifier
@@ -318,6 +337,7 @@ class AudioProcessor:
         target_lufs: float = DEFAULT_LUFS,
         true_peak: float = DEFAULT_TRUE_PEAK,
         recursive: bool = True,
+        workers: int | None = None,
     ) -> ProcessSummary:
         """ディレクトリ配下のファイルを順次処理する"""
         self.executor.ensure_available()
@@ -335,26 +355,77 @@ class AudioProcessor:
 
         plan = self.planner.create_plan(files, input_dir, self.force)
         results: List[NormalizationResult] = []
-        for index, entry in enumerate(plan.entries, start=1):
-            destination = output_dir / entry.relative
-            ensure_directory(destination.parent)
-            destination = destination.with_suffix(".mp3")
-            destination = generate_unique_output_path(destination)
-            self.logger.info(
-                "[%s/%s] %s を処理します",
-                index,
-                plan.planned_count,
-                entry.source.name,
-            )
-            result = self.executor.normalize(
-                input_file=entry.source,
-                destination=destination,
-                target_lufs=target_lufs,
-                true_peak=true_peak,
-            )
-            results.append(result)
-            if result.success:
-                self.history_service.mark_processed(entry.relative, entry.size, entry.mtime)
+        planned_count = plan.planned_count
+        worker_count = min(max(1, workers or self.workers), planned_count) if planned_count else 1
+        self.logger.info("並列実行数: %s", worker_count)
+        self._notify(f"並列実行数: {worker_count}")
+
+        if worker_count == 1:
+            for index, entry in enumerate(plan.entries, start=1):
+                result = self._process_single_entry(
+                    index=index,
+                    total=planned_count,
+                    entry=entry,
+                    output_dir=output_dir,
+                    target_lufs=target_lufs,
+                    true_peak=true_peak,
+                )
+                results.append(result)
+                if result.success:
+                    self.history_service.mark_processed(entry.relative, entry.size, entry.mtime)
+        else:
+            with ThreadPoolExecutor(max_workers=worker_count) as pool:
+                futures = {
+                    pool.submit(
+                        self._process_single_entry,
+                        index,
+                        planned_count,
+                        entry,
+                        output_dir,
+                        target_lufs,
+                        true_peak,
+                    ): entry
+                    for index, entry in enumerate(plan.entries, start=1)
+                }
+                for future in as_completed(futures):
+                    entry = futures[future]
+                    try:
+                        result = future.result()
+                    except Exception as exc:  # noqa: BLE001
+                        message = f"処理失敗: {entry.source.name} | 予期せぬエラー: {exc}"
+                        self.logger.exception(message)
+                        self._notify(message)
+                        result = NormalizationResult(
+                            input_file=entry.source,
+                            output_file=output_dir / entry.relative,
+                            success=False,
+                            message=str(exc),
+                            command="",
+                        )
+                    results.append(result)
+                    if result.success:
+                        self.history_service.mark_processed(entry.relative, entry.size, entry.mtime)
 
         self.history_service.save()
         return self.aggregator.summarize(plan, results)
+
+    def _process_single_entry(
+        self,
+        index: int,
+        total: int,
+        entry: PlanEntry,
+        output_dir: Path,
+        target_lufs: float,
+        true_peak: float,
+    ) -> NormalizationResult:
+        destination = output_dir / entry.relative
+        ensure_directory(destination.parent)
+        destination = destination.with_suffix(".mp3")
+        destination = generate_unique_output_path(destination)
+        self.logger.info("[%s/%s] %s を処理します", index, total, entry.source.name)
+        return self.executor.normalize(
+            input_file=entry.source,
+            destination=destination,
+            target_lufs=target_lufs,
+            true_peak=true_peak,
+        )

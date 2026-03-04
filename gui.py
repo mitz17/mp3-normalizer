@@ -11,7 +11,7 @@ import tkinter as tk
 from dataclasses import dataclass
 
 from processor import AudioProcessor
-from utils import DEFAULT_LUFS, DEFAULT_TRUE_PEAK, scan_audio_files
+from utils import DEFAULT_LUFS, DEFAULT_TRUE_PEAK, DEFAULT_WORKERS, scan_audio_files
 
 
 @dataclass
@@ -43,6 +43,7 @@ class AdjusterApp(tk.Tk):
         self.output_var = tk.StringVar()
         self.lufs_var = tk.DoubleVar(value=DEFAULT_LUFS)
         self.true_peak_var = tk.DoubleVar(value=DEFAULT_TRUE_PEAK)
+        self.workers_var = tk.IntVar(value=DEFAULT_WORKERS)
         self.force_var = tk.BooleanVar(value=False)
         self.include_subdirs_var = tk.BooleanVar(value=True)
         self.preview_summary_var = tk.StringVar(value="入力フォルダを選択してください")
@@ -75,20 +76,25 @@ class AdjusterApp(tk.Tk):
         ttk.Label(frame, text="True Peak (dBFS)").grid(column=0, row=3, sticky="w", **padding)
         ttk.Entry(frame, textvariable=self.true_peak_var, width=10).grid(column=1, row=3, sticky="w", **padding)
 
+        ttk.Label(frame, text="並列実行数").grid(column=0, row=4, sticky="w", **padding)
+        ttk.Spinbox(frame, from_=1, to=32, textvariable=self.workers_var, width=8).grid(
+            column=1, row=4, sticky="w", **padding
+        )
+
         self.start_button = ttk.Button(frame, text="正規化を開始", command=self._start_processing)
-        self.start_button.grid(column=0, row=4, columnspan=3, sticky="ew", padx=8, pady=(8, 4))
+        self.start_button.grid(column=0, row=5, columnspan=3, sticky="ew", padx=8, pady=(8, 4))
 
         ttk.Checkbutton(
             frame,
             text="処理済みでも再実行する",
             variable=self.force_var,
-        ).grid(column=0, row=5, columnspan=3, sticky="w", padx=8, pady=(0, 4))
+        ).grid(column=0, row=6, columnspan=3, sticky="w", padx=8, pady=(0, 4))
 
         ttk.Checkbutton(
             frame,
             text="サブフォルダも対象にする",
             variable=self.include_subdirs_var,
-        ).grid(column=0, row=6, columnspan=3, sticky="w", padx=8, pady=(0, 8))
+        ).grid(column=0, row=7, columnspan=3, sticky="w", padx=8, pady=(0, 8))
 
         preview_frame = ttk.LabelFrame(self, text="対象mp3プレビュー")
         preview_frame.grid(column=0, row=1, sticky="nsew", padx=8, pady=(0, 8))
@@ -136,8 +142,12 @@ class AdjusterApp(tk.Tk):
             output_dir = Path(self.output_var.get()).expanduser()
             target_lufs = float(self.lufs_var.get())
             true_peak = float(self.true_peak_var.get())
+            workers = int(self.workers_var.get())
         except ValueError:
             messagebox.showerror("入力エラー", "数値の入力を確認してください")
+            return
+        if workers < 1:
+            messagebox.showerror("入力エラー", "並列実行数は 1 以上を指定してください")
             return
 
         if not input_dir.exists() or not input_dir.is_dir():
@@ -173,11 +183,12 @@ class AdjusterApp(tk.Tk):
             return
 
         self.processor.force = force
+        self.processor.workers = workers
         self._append_log("処理を開始します")
         self.start_button.configure(state=tk.DISABLED)
         self.worker = threading.Thread(
             target=self._run_processing,
-            args=(input_dir, output_dir, target_lufs, true_peak, include_subdirs),
+            args=(input_dir, output_dir, target_lufs, true_peak, include_subdirs, workers),
             daemon=True,
         )
         self.worker.start()
@@ -189,6 +200,7 @@ class AdjusterApp(tk.Tk):
         target_lufs: float,
         true_peak: float,
         include_subdirs: bool,
+        workers: int,
     ) -> None:
         try:
             self.processor.process_directory(
@@ -197,6 +209,7 @@ class AdjusterApp(tk.Tk):
                 target_lufs=target_lufs,
                 true_peak=true_peak,
                 recursive=include_subdirs,
+                workers=workers,
             )
         except Exception as exc:  # noqa: BLE001
             message = f"予期せぬエラーが発生しました: {exc}"

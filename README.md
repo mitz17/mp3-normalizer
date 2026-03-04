@@ -30,6 +30,7 @@ python main.py
 ```
 1. 入力フォルダ（INPUT_DIR）と出力フォルダ（OUTPUT_DIR）を選択。入力フォルダを指定すると画面中央の「対象mp3プレビュー」に対象ファイル一覧が即時表示される
 2. LUFS 目標値と True Peak（既定 -14 LUFS / -1 dBFS）を入力
+   - 並列実行数（既定: `min(4, CPU論理コア数)`）を必要に応じて調整
 3. 必要に応じてチェックを切り替える
    - 「処理済みでも再実行する」…履歴に存在する mp3 も再処理（既定オフ）
    - 「サブフォルダも対象にする」…INPUT_DIR 配下を再帰的に探索（既定オン）。オフにすると直下ファイルのみを扱う
@@ -38,10 +39,20 @@ python main.py
 
 ### CLI モード
 ```bash
-python main.py --cli --input <INPUT_DIR> --output <OUTPUT_DIR> [--lufs -14.0] [--true-peak -1.0] [--force]
+python main.py --cli --input <INPUT_DIR> --output <OUTPUT_DIR> [--lufs -14.0] [--true-peak -1.0] [--force] [--workers 4]
 ```
 - `--force` を省略すると過去に処理済みのファイルは `processed_history.json` の記録にもとづきスキップされます
+- `--workers` は並列実行数です（既定: `min(4, CPU論理コア数)`）
+- `--workers` は `1` 以上を指定してください。上限の目安は `CPU論理コア数` です
 - 戻り値 0: すべて成功 / 1: 入力エラーまたは対象なし / 2: 一部失敗
+
+### 並列実行数の目安
+- 上限目安: `CPU論理コア数`
+- 既定値: `min(4, CPU論理コア数)`（多くの環境で安定しやすい）
+- 推奨レンジ:
+  - SSD: `4〜8`
+  - 他作業しながら利用: `2〜4`
+  - HDD: `2〜4`（上げすぎると逆に遅くなる場合あり）
 
 ## ディレクトリ構成
 ```

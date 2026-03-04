@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ SUPPORTED_EXTENSIONS = [".mp3"]
 LOG_FILE = Path("mp3_normalizer.log")
 FFMPEG_COMMAND = "ffmpeg"
 PROCESSED_HISTORY_FILE = Path("processed_history.json")
+DEFAULT_WORKERS = max(1, min(4, os.cpu_count() or 1))
 
 
 def configure_logger() -> logging.Logger:
