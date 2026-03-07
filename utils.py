@@ -9,9 +9,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List
 
-DEFAULT_LUFS = -14.0
-DEFAULT_TRUE_PEAK = -1.0
-SUPPORTED_EXTENSIONS = [".mp3"]
+DEFAULT_LUFS = -18.0
+DEFAULT_TRUE_PEAK = -1.5
+DEFAULT_LRA = 16.0
+DEFAULT_LINEAR = True
+DEFAULT_OUTPUT_FORMAT = "mp3"
+DEFAULT_AUDIO_CODEC = "auto"
+DEFAULT_MP3_QUALITY = "2"
+DEFAULT_AAC_BITRATE = "192k"
+DEFAULT_METADATA_MODE = "all"
+SUPPORTED_EXTENSIONS = [".mp3", ".m4a", ".aac", ".flac", ".wav", ".ogg"]
+SUPPORTED_OUTPUT_FORMATS = ("mp3", "aac", "flac", "wav", "ogg")
 LOG_FILE = Path("mp3_normalizer.log")
 FFMPEG_COMMAND = "ffmpeg"
 PROCESSED_HISTORY_FILE = Path("processed_history.json")

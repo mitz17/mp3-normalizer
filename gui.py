@@ -11,7 +11,17 @@ import tkinter as tk
 from dataclasses import dataclass
 
 from processor import AudioProcessor
-from utils import DEFAULT_LUFS, DEFAULT_TRUE_PEAK, DEFAULT_WORKERS, MAX_WORKERS, scan_audio_files
+from utils import (
+    DEFAULT_LRA,
+    DEFAULT_LUFS,
+    DEFAULT_OUTPUT_FORMAT,
+    DEFAULT_TRUE_PEAK,
+    DEFAULT_WORKERS,
+    MAX_WORKERS,
+    SUPPORTED_EXTENSIONS,
+    SUPPORTED_OUTPUT_FORMATS,
+    scan_audio_files,
+)
 
 
 @dataclass
@@ -43,6 +53,12 @@ class AdjusterApp(tk.Tk):
         self.output_var = tk.StringVar()
         self.lufs_var = tk.DoubleVar(value=DEFAULT_LUFS)
         self.true_peak_var = tk.DoubleVar(value=DEFAULT_TRUE_PEAK)
+        self.lra_var = tk.DoubleVar(value=DEFAULT_LRA)
+        self.output_format_var = tk.StringVar(value=DEFAULT_OUTPUT_FORMAT)
+        self.input_extension_vars = {
+            ext: tk.BooleanVar(value=ext in {".mp3", ".aac", ".flac", ".wav"})
+            for ext in SUPPORTED_EXTENSIONS
+        }
         self.workers_var = tk.IntVar(value=DEFAULT_WORKERS)
         self.max_workers = MAX_WORKERS
         self.force_var = tk.BooleanVar(value=False)
@@ -77,7 +93,19 @@ class AdjusterApp(tk.Tk):
         ttk.Label(frame, text="True Peak (dBFS)").grid(column=0, row=3, sticky="w", **padding)
         ttk.Entry(frame, textvariable=self.true_peak_var, width=10).grid(column=1, row=3, sticky="w", **padding)
 
-        ttk.Label(frame, text="並列実行数").grid(column=0, row=4, sticky="w", **padding)
+        ttk.Label(frame, text="LRA 目標値").grid(column=0, row=4, sticky="w", **padding)
+        ttk.Entry(frame, textvariable=self.lra_var, width=10).grid(column=1, row=4, sticky="w", **padding)
+
+        ttk.Label(frame, text="出力形式").grid(column=0, row=5, sticky="w", **padding)
+        ttk.Combobox(
+            frame,
+            textvariable=self.output_format_var,
+            values=list(SUPPORTED_OUTPUT_FORMATS),
+            state="readonly",
+            width=10,
+        ).grid(column=1, row=5, sticky="w", **padding)
+
+        ttk.Label(frame, text="並列実行数").grid(column=0, row=6, sticky="w", **padding)
         validate_workers_cmd = (self.register(self._validate_workers_value), "%P")
         ttk.Spinbox(
             frame,
@@ -87,24 +115,33 @@ class AdjusterApp(tk.Tk):
             width=8,
             validate="key",
             validatecommand=validate_workers_cmd,
-        ).grid(column=1, row=4, sticky="w", **padding)
+        ).grid(column=1, row=6, sticky="w", **padding)
 
         self.start_button = ttk.Button(frame, text="正規化を開始", command=self._start_processing)
-        self.start_button.grid(column=0, row=5, columnspan=3, sticky="ew", padx=8, pady=(8, 4))
+        self.start_button.grid(column=0, row=7, columnspan=3, sticky="ew", padx=8, pady=(8, 4))
 
         ttk.Checkbutton(
             frame,
             text="処理済みでも再実行する",
             variable=self.force_var,
-        ).grid(column=0, row=6, columnspan=3, sticky="w", padx=8, pady=(0, 4))
+        ).grid(column=0, row=8, columnspan=3, sticky="w", padx=8, pady=(0, 4))
 
         ttk.Checkbutton(
             frame,
             text="サブフォルダも対象にする",
             variable=self.include_subdirs_var,
-        ).grid(column=0, row=7, columnspan=3, sticky="w", padx=8, pady=(0, 8))
+        ).grid(column=0, row=9, columnspan=3, sticky="w", padx=8, pady=(0, 8))
 
-        preview_frame = ttk.LabelFrame(self, text="対象mp3プレビュー")
+        ext_frame = ttk.LabelFrame(frame, text="処理対象拡張子")
+        ext_frame.grid(column=0, row=10, columnspan=3, sticky="ew", padx=8, pady=(0, 8))
+        for idx, ext in enumerate(SUPPORTED_EXTENSIONS):
+            ttk.Checkbutton(
+                ext_frame,
+                text=ext.lstrip(".").upper(),
+                variable=self.input_extension_vars[ext],
+            ).grid(column=idx % 3, row=idx // 3, sticky="w", padx=8, pady=2)
+
+        preview_frame = ttk.LabelFrame(self, text="対象音声プレビュー")
         preview_frame.grid(column=0, row=1, sticky="nsew", padx=8, pady=(0, 8))
         ttk.Label(preview_frame, textvariable=self.preview_summary_var).pack(
             anchor="w", padx=8, pady=(8, 4)
@@ -128,6 +165,8 @@ class AdjusterApp(tk.Tk):
 
         for var in (self.input_var, self.force_var, self.include_subdirs_var):
             var.trace_add("write", trigger)
+        for var in self.input_extension_vars.values():
+            var.trace_add("write", trigger)
 
     def _select_input(self) -> None:
         directory = filedialog.askdirectory(title="入力フォルダを選択")
@@ -150,6 +189,8 @@ class AdjusterApp(tk.Tk):
             output_dir = Path(self.output_var.get()).expanduser()
             target_lufs = float(self.lufs_var.get())
             true_peak = float(self.true_peak_var.get())
+            lra = float(self.lra_var.get())
+            output_format = self.output_format_var.get().strip().lower()
             workers = int(self.workers_var.get())
         except ValueError:
             messagebox.showerror("入力エラー", "数値の入力を確認してください")
@@ -176,14 +217,18 @@ class AdjusterApp(tk.Tk):
                 return
 
         include_subdirs = self.include_subdirs_var.get()
+        input_extensions = self._selected_input_extensions()
+        if not input_extensions:
+            messagebox.showerror("入力エラー", "処理対象拡張子を1つ以上選択してください")
+            return
         try:
-            files = scan_audio_files(input_dir, recursive=include_subdirs)
+            files = scan_audio_files(input_dir, extensions=input_extensions, recursive=include_subdirs)
         except ValueError as exc:
             messagebox.showerror("入力エラー", str(exc))
             return
 
         if not files:
-            messagebox.showinfo("対象なし", "指定フォルダに mp3 ファイルが見つかりません")
+            messagebox.showinfo("対象なし", "指定フォルダに対象音声ファイルが見つかりません")
             return
 
         force = self.force_var.get()
@@ -202,7 +247,16 @@ class AdjusterApp(tk.Tk):
         self.start_button.configure(state=tk.DISABLED)
         self.worker = threading.Thread(
             target=self._run_processing,
-            args=(input_dir, output_dir, target_lufs, true_peak, include_subdirs, workers),
+            args=(
+                input_dir,
+                output_dir,
+                target_lufs,
+                true_peak,
+                lra,
+                output_format,
+                input_extensions,
+                include_subdirs,
+            ),
             daemon=True,
         )
         self.worker.start()
@@ -213,8 +267,10 @@ class AdjusterApp(tk.Tk):
         output_dir: Path,
         target_lufs: float,
         true_peak: float,
+        lra: float,
+        output_format: str,
+        input_extensions: list[str],
         include_subdirs: bool,
-        workers: int,
     ) -> None:
         try:
             self.processor.process_directory(
@@ -222,8 +278,10 @@ class AdjusterApp(tk.Tk):
                 output_dir=output_dir,
                 target_lufs=target_lufs,
                 true_peak=true_peak,
+                lra=lra,
+                output_format=output_format,
+                input_extensions=input_extensions,
                 recursive=include_subdirs,
-                workers=workers,
             )
         except Exception as exc:  # noqa: BLE001
             message = f"予期せぬエラーが発生しました: {exc}"
@@ -296,14 +354,18 @@ class AdjusterApp(tk.Tk):
             return
 
         recursive = self.include_subdirs_var.get()
+        input_extensions = self._selected_input_extensions()
+        if not input_extensions:
+            self._render_preview("処理対象拡張子を1つ以上選択してください", [])
+            return
         try:
-            files = scan_audio_files(input_dir, recursive=recursive)
+            files = scan_audio_files(input_dir, extensions=input_extensions, recursive=recursive)
         except ValueError as exc:
             self._render_preview(str(exc), [])
             return
 
         if not files:
-            self._render_preview("mp3 ファイルが見つかりません", [])
+            self._render_preview("対象音声ファイルが見つかりません", [])
             return
 
         force = self.force_var.get()
@@ -324,7 +386,7 @@ class AdjusterApp(tk.Tk):
         self.preview_widget.configure(state=tk.DISABLED)
 
     def _show_preview_dialog(self, preview: PreviewInfo) -> bool:
-        """対象mp3リストを表示して実行可否を確認する"""
+        """対象音声リストを表示して実行可否を確認する"""
         dialog = tk.Toplevel(self)
         dialog.title("対象ファイル確認")
         dialog.transient(self)
@@ -395,6 +457,13 @@ class AdjusterApp(tk.Tk):
         self.log_widget.insert(tk.END, message + "\n")
         self.log_widget.see(tk.END)
         self.log_widget.configure(state=tk.DISABLED)
+
+    def _selected_input_extensions(self) -> list[str]:
+        return [
+            ext
+            for ext, enabled in self.input_extension_vars.items()
+            if enabled.get()
+        ]
 
 
 def launch_gui(logger: logging.Logger) -> None:
