@@ -64,7 +64,11 @@ class AdjusterApp(tk.Tk):
         self.force_var = tk.BooleanVar(value=False)
         self.include_subdirs_var = tk.BooleanVar(value=True)
         self.preview_summary_var = tk.StringVar(value="入力フォルダを選択してください")
+        self.progress_var = tk.DoubleVar(value=0)
+        self.progress_text_var = tk.StringVar(value="進捗: 0 / 0")
         self._preview_update_job: str | None = None
+        self._progress_total = 0
+        self._progress_completed = 0
 
         self._build_widgets()
         self._bind_variable_updates()
@@ -154,8 +158,22 @@ class AdjusterApp(tk.Tk):
         )
         self.preview_widget.pack(fill="both", expand=True, padx=8, pady=(0, 8))
 
+        progress_frame = ttk.LabelFrame(self, text="処理進捗")
+        progress_frame.grid(column=0, row=2, sticky="ew", padx=8, pady=(0, 8))
+        ttk.Label(progress_frame, textvariable=self.progress_text_var).pack(
+            anchor="w", padx=8, pady=(8, 4)
+        )
+        self.progress_bar = ttk.Progressbar(
+            progress_frame,
+            orient="horizontal",
+            mode="determinate",
+            maximum=1,
+            variable=self.progress_var,
+        )
+        self.progress_bar.pack(fill="x", expand=True, padx=8, pady=(0, 8))
+
         self.log_widget = scrolledtext.ScrolledText(self, width=70, height=12, state=tk.DISABLED)
-        self.log_widget.grid(column=0, row=2, padx=8, pady=(0, 8))
+        self.log_widget.grid(column=0, row=3, padx=8, pady=(0, 8))
 
     def _bind_variable_updates(self) -> None:
         """プレビュー更新が必要な変数にトレースを設定"""
@@ -243,6 +261,7 @@ class AdjusterApp(tk.Tk):
 
         self.processor.force = force
         self.processor.workers = workers
+        self._reset_progress(preview.process_count)
         self._append_log("処理を開始します")
         self.start_button.configure(state=tk.DISABLED)
         self.worker = threading.Thread(
@@ -435,8 +454,10 @@ class AdjusterApp(tk.Tk):
             while True:
                 message = self.message_queue.get_nowait()
                 if message == "__DONE__":
+                    self._finish_progress()
                     self.start_button.configure(state=tk.NORMAL)
                 else:
+                    self._handle_progress_message(message)
                     self._append_log(message)
         except queue.Empty:
             pass
@@ -457,6 +478,33 @@ class AdjusterApp(tk.Tk):
         self.log_widget.insert(tk.END, message + "\n")
         self.log_widget.see(tk.END)
         self.log_widget.configure(state=tk.DISABLED)
+
+    def _reset_progress(self, total: int) -> None:
+        self._progress_total = max(0, total)
+        self._progress_completed = 0
+        self.progress_bar.configure(maximum=max(1, self._progress_total))
+        self.progress_var.set(0)
+        self.progress_text_var.set(f"進捗: 0 / {self._progress_total}")
+
+    def _handle_progress_message(self, message: str) -> None:
+        if not message.startswith(("処理成功:", "処理失敗:")):
+            return
+        if self._progress_completed >= self._progress_total:
+            return
+        self._progress_completed += 1
+        self.progress_var.set(self._progress_completed)
+        self.progress_text_var.set(
+            f"進捗: {self._progress_completed} / {self._progress_total}"
+        )
+
+    def _finish_progress(self) -> None:
+        if self._progress_total <= 0:
+            self.progress_text_var.set("進捗: 0 / 0")
+            self.progress_var.set(0)
+            return
+        completed = min(self._progress_completed, self._progress_total)
+        self.progress_var.set(completed)
+        self.progress_text_var.set(f"進捗: {completed} / {self._progress_total}")
 
     def _selected_input_extensions(self) -> list[str]:
         return [
